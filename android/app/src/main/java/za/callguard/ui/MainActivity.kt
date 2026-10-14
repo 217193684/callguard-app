@@ -11,6 +11,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -71,6 +72,7 @@ import za.callguard.core.REPORT_CATEGORIES
 import za.callguard.core.ScreenedCall
 import za.callguard.core.Settings
 import za.callguard.core.Store
+import za.callguard.core.WebSearch
 import za.callguard.sync.SpamSyncWorker
 
 private val Green = Color(0xFF0B6E4F)
@@ -79,11 +81,16 @@ private val Orange = Color(0xFFEF6C00)
 private val Blue = Color(0xFF1565C0)
 
 class MainActivity : ComponentActivity() {
+    companion object {
+        const val EXTRA_NUMBER = "number"
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val startNumber = intent?.getStringExtra(EXTRA_NUMBER)
         setContent {
             MaterialTheme(colorScheme = lightColorScheme(primary = Green)) {
-                Surface(Modifier.fillMaxSize()) { AppScreen() }
+                Surface(Modifier.fillMaxSize()) { AppScreen(startNumber) }
             }
         }
     }
@@ -91,8 +98,9 @@ class MainActivity : ComponentActivity() {
 
 // ------------------------------------------------------------------ shell
 @Composable
-private fun AppScreen() {
-    var tab by remember { mutableIntStateOf(0) }
+private fun AppScreen(startNumber: String?) {
+    var tab by remember { mutableIntStateOf(if (startNumber != null) 1 else 0) }
+    var lookupNumber by remember { mutableStateOf(startNumber) }
     var refresh by remember { mutableIntStateOf(0) }   // bump to reload lists
     val tabs = listOf("Recent", "Lookup", "Blocked", "Settings")
 
@@ -110,8 +118,8 @@ private fun AppScreen() {
         }
         val onChanged: () -> Unit = { refresh++ }
         when (tab) {
-            0 -> RecentTab(refresh, onChanged)
-            1 -> LookupTab(onChanged)
+            0 -> RecentTab(refresh) { number -> lookupNumber = number; tab = 1 }
+            1 -> LookupTab(lookupNumber, onChanged)
             2 -> BlockedTab(refresh, onChanged)
             3 -> SettingsTab()
         }
@@ -163,7 +171,7 @@ private fun notificationsGranted(ctx: Context) =
 
 // ------------------------------------------------------------------ recent
 @Composable
-private fun RecentTab(refresh: Int, onChanged: () -> Unit) {
+private fun RecentTab(refresh: Int, onOpen: (String) -> Unit) {
     val ctx = LocalContext.current
     val store = remember { Store.get(ctx) }
     var calls by remember { mutableStateOf(emptyList<ScreenedCall>()) }
@@ -175,8 +183,11 @@ private fun RecentTab(refresh: Int, onChanged: () -> Unit) {
     }
     LazyColumn(Modifier.fillMaxSize()) {
         items(calls, key = { it.id }) { c ->
+            val tappable = c.number != "Hidden"
             Row(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+                Modifier.fillMaxWidth()
+                    .clickable(enabled = tappable) { onOpen(c.number) }
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(Modifier.weight(1f)) {
@@ -198,13 +209,13 @@ private fun RecentTab(refresh: Int, onChanged: () -> Unit) {
 
 // ------------------------------------------------------------------ lookup
 @Composable
-private fun LookupTab(onChanged: () -> Unit) {
+private fun LookupTab(startNumber: String?, onChanged: () -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val settings = remember { Settings(ctx) }
     val store = remember { Store.get(ctx) }
     val api = remember { ApiClient(settings) }
-    var input by remember { mutableStateOf("") }
+    var input by remember(startNumber) { mutableStateOf(startNumber?.let { PhoneUtil.pretty(it) } ?: "") }
     var result by remember { mutableStateOf<LookupResult?>(null) }
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
@@ -215,12 +226,15 @@ private fun LookupTab(onChanged: () -> Unit) {
         busy = true; message = null
         scope.launch {
             result = CallerLookup(ctx).identify(n, timeoutMs = 6000)
-            if (result?.source == "none") message =
-                if (settings.hasServer) "Couldn't reach the server and nothing is cached for this number."
-                else "No community data (no server set up). You can still block or unblock this number."
+            if (result?.source == "none" && result?.myName == null) message =
+                if (settings.hasServer) "No reports for this number yet. Tap \"Who is this?\" to search the web."
+                else "Tap \"Who is this?\" to see which company or agency publishes this number online."
             busy = false
         }
     }
+
+    // Opened from a call notification or the Recent list: look it up straight away
+    LaunchedEffect(startNumber) { if (startNumber != null) search() }
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
@@ -238,6 +252,22 @@ private fun LookupTab(onChanged: () -> Unit) {
         message?.let { Text(it, color = Color.Gray) }
         result?.let { r ->
             ResultCard(r)
+            Button(onClick = { WebSearch.open(ctx, r.number) }, modifier = Modifier.fillMaxWidth()) {
+                Text("Who is this? Search the web")
+            }
+            Text(
+                "Searches Google for every way this number is written (021…, +27…). Companies, " +
+                    "recruitment agencies and shops usually list their numbers online; private numbers usually aren't.",
+                style = MaterialTheme.typography.bodySmall, color = Color.Gray,
+            )
+            HorizontalDivider()
+            NamePanel(r) { newName ->
+                if (newName.isBlank()) store.deleteName(r.number) else store.saveName(r.number, newName)
+                result = r.copy(myName = newName.trim().ifBlank { null })
+                message = if (newName.isBlank()) "Name removed." else "Saved. It will show when this number calls."
+                onChanged()
+            }
+            HorizontalDivider()
             ReportPanel(r) { isSpam, category, label ->
                 scope.launch {
                     if (isSpam) store.block(r.number, label ?: "Reported as spam") else store.unblock(r.number)
@@ -264,7 +294,8 @@ private fun ResultCard(r: LookupResult) {
                 VerdictBadge(r.verdict)
             }
             Text(PhoneUtil.pretty(r.number))
-            if (r.businessName != null) Text("Verified business", color = Blue)
+            if (r.myName != null) Text("Name saved by you", color = Green)
+            if (r.businessName != null) Text("Verified business: ${r.businessName}", color = Blue)
             if (r.reports > 0 || r.notSpam > 0) {
                 Text("Spam likelihood ${r.score}% · ${r.reports} spam / ${r.notSpam} not-spam votes")
             }
@@ -276,6 +307,25 @@ private fun ResultCard(r: LookupResult) {
                     style = MaterialTheme.typography.bodySmall, color = Color.Gray)
             }
             Text("Source: ${r.source}", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+        }
+    }
+}
+
+@Composable
+private fun NamePanel(r: LookupResult, onSave: (String) -> Unit) {
+    var name by remember(r.number, r.myName) { mutableStateOf(r.myName ?: "") }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("Name this number", fontWeight = FontWeight.SemiBold)
+        OutlinedTextField(
+            value = name, onValueChange = { name = it.take(60) },
+            label = { Text("e.g. Recruiter – Pro Talent") },
+            singleLine = true, modifier = Modifier.fillMaxWidth(),
+        )
+        Text("Saved on this phone only. It shows on screen the next time this number calls.",
+            style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = { onSave(name.trim()) }, enabled = name.isNotBlank()) { Text("Save name") }
+            if (r.myName != null) OutlinedButton(onClick = { onSave("") }) { Text("Remove name") }
         }
     }
 }

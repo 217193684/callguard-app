@@ -7,7 +7,7 @@ import android.database.sqlite.SQLiteOpenHelper
 
 /** On-phone database: your block list, cached spam info, and the screened-call history. */
 class Store private constructor(context: Context) :
-    SQLiteOpenHelper(context.applicationContext, "callguard.db", null, 1) {
+    SQLiteOpenHelper(context.applicationContext, "callguard.db", null, 2) {
 
     companion object {
         @Volatile private var instance: Store? = null
@@ -30,9 +30,31 @@ class Store private constructor(context: Context) :
                 id INTEGER PRIMARY KEY AUTOINCREMENT, number TEXT NOT NULL, title TEXT NOT NULL,
                 verdict TEXT NOT NULL, action TEXT NOT NULL, at INTEGER NOT NULL)"""
         )
+        createNames(db)
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {}
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) createNames(db)
+    }
+
+    private fun createNames(db: SQLiteDatabase) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS names(number TEXT PRIMARY KEY, name TEXT NOT NULL, at INTEGER NOT NULL)")
+    }
+
+    // ---- your own names for numbers
+    fun savedName(number: String): String? =
+        readableDatabase.rawQuery("SELECT name FROM names WHERE number=?", arrayOf(number))
+            .use { if (it.moveToFirst()) it.getString(0) else null }
+
+    fun saveName(number: String, name: String) {
+        writableDatabase.insertWithOnConflict("names", null, ContentValues().apply {
+            put("number", number); put("name", name.trim().take(60)); put("at", System.currentTimeMillis())
+        }, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
+    fun deleteName(number: String) {
+        writableDatabase.delete("names", "number=?", arrayOf(number))
+    }
 
     // ---- block list
     fun isBlocked(number: String): Boolean =

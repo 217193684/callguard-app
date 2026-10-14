@@ -14,12 +14,14 @@ data class LookupResult(
     val location: String? = null,
     val lineType: String? = null,
     val source: String = "server",      // server | offline cache | your block list | none
+    val myName: String? = null,         // a name you saved for this number (on this phone only)
 ) {
     val isSpam get() = verdict == "spam"
     val isBlockedByUser get() = verdict == "blocked"
 
     /** Best name to show on the incoming-call notification. */
-    fun title(): String = businessName
+    fun title(): String = myName
+        ?: businessName
         ?: label
         ?: when (verdict) {
             "spam" -> "Likely spam"

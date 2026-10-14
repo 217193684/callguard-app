@@ -9,6 +9,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import za.callguard.R
 import za.callguard.core.LookupResult
+import za.callguard.core.WebSearch
 import za.callguard.ui.MainActivity
 
 object Notifier {
@@ -36,10 +37,19 @@ object Notifier {
         val nm = NotificationManagerCompat.from(context)
         if (!nm.areNotificationsEnabled()) return
 
+        // Tapping the notification opens Lookup for this number, ready to name or search it
         val open = PendingIntent.getActivity(
-            context, 0, Intent(context, MainActivity::class.java),
+            context, notificationId(r.number),
+            Intent(context, MainActivity::class.java)
+                .putExtra(MainActivity.EXTRA_NUMBER, r.number)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
+        val web = PendingIntent.getActivity(
+            context, notificationId(r.number) + 1, WebSearch.intent(r.number),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val unnamed = r.myName == null && r.businessName == null
         val title = if (blocked) "Blocked: ${r.title()}" else r.title()
         val color = when {
             blocked || r.isSpam -> 0xFFC62828.toInt()
@@ -51,7 +61,7 @@ object Notifier {
         val b = NotificationCompat.Builder(context, if (blocked) CH_BLOCKED else CH_CALLER)
             .setSmallIcon(R.drawable.ic_stat_shield)
             .setContentTitle(title)
-            .setContentText(r.subtitle().ifBlank { "No reports for this number" })
+            .setContentText(r.subtitle().ifBlank { "Unknown number · tap to name it" })
             .setColor(color)
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setPriority(if (blocked) NotificationCompat.PRIORITY_LOW else NotificationCompat.PRIORITY_HIGH)
@@ -62,6 +72,7 @@ object Notifier {
         if (!blocked) {
             b.addAction(0, "Report spam", ReportReceiver.intent(context, r.number, isSpam = true))
             b.addAction(0, "Not spam", ReportReceiver.intent(context, r.number, isSpam = false))
+            if (unnamed) b.addAction(0, "Who is this?", web)
         } else if (r.isBlockedByUser.not()) {
             b.addAction(0, "Not spam", ReportReceiver.intent(context, r.number, isSpam = false))
         }

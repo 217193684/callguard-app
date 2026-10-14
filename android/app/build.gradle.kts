@@ -1,8 +1,18 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
 }
+
+// Fixed signing key so every build can install as an update over the previous one
+val keyProps = Properties().apply {
+    val f = rootProject.file("keystore.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+// Each GitHub build gets a higher version number automatically
+val buildNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
 
 android {
     namespace = "za.callguard"
@@ -12,13 +22,28 @@ android {
         applicationId = "za.callguard"
         minSdk = 29          // Android 10+: needed for the call-screening role
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = buildNumber
+        versionName = "1.$buildNumber"
+    }
+
+    signingConfigs {
+        if (keyProps.containsKey("storeFile")) {
+            create("shared") {
+                storeFile = rootProject.file(keyProps.getProperty("storeFile"))
+                storePassword = keyProps.getProperty("storePassword")
+                keyAlias = keyProps.getProperty("keyAlias")
+                keyPassword = keyProps.getProperty("keyPassword")
+            }
+        }
     }
 
     buildTypes {
+        debug {
+            signingConfigs.findByName("shared")?.let { signingConfig = it }
+        }
         release {
             isMinifyEnabled = false
+            signingConfigs.findByName("shared")?.let { signingConfig = it }
         }
     }
     compileOptions {

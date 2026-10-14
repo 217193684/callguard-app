@@ -108,7 +108,7 @@ private fun AppScreen() {
                 Tab(selected = tab == i, onClick = { tab = i; refresh++ }, text = { Text(t) })
             }
         }
-        val onChanged = { refresh++ }
+        val onChanged: () -> Unit = { refresh++ }
         when (tab) {
             0 -> RecentTab(refresh, onChanged)
             1 -> LookupTab(onChanged)
@@ -232,7 +232,7 @@ private fun LookupTab(onChanged: () -> Unit) {
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
             modifier = Modifier.fillMaxWidth(),
         )
-        Button(onClick = ::search, enabled = !busy && input.isNotBlank()) {
+        Button(onClick = { search() }, enabled = !busy && input.isNotBlank()) {
             Text(if (busy) "Searching…" else "Search")
         }
         message?.let { Text(it, color = Color.Gray) }
@@ -333,7 +333,9 @@ private fun BlockedTab(refresh: Int, onChanged: () -> Unit) {
             Spacer(Modifier.width(8.dp))
             Button(onClick = {
                 val n = PhoneUtil.normalize(input, settings.region)
-                if (n == null) error = "Not a valid number" else {
+                if (n == null) {
+                    error = "Not a valid number"
+                } else {
                     store.block(n, "Added by you"); input = ""; error = null; onChanged()
                 }
             }) { Text("Block") }

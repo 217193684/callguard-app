@@ -27,7 +27,18 @@ jobs:
           gradle-version: "8.11.1"
 
       - name: Build debug APK
-        run: gradle assembleDebug --no-daemon --stacktrace
+        run: |
+          set -o pipefail
+          if ! gradle assembleDebug --no-daemon 2>&1 | tee build.log; then
+            # Surface the real errors as annotations so they show up without opening logs
+            grep -E "^e: |error:|What went wrong|> " build.log | grep -v "^> Task" | head -40 > errs.txt || true
+            n=0
+            while IFS= read -r line; do
+              n=$((n+1)); [ $n -gt 9 ] && break
+              echo "::error::$line"
+            done < errs.txt
+            exit 1
+          fi
 
       - name: Rename APK
         run: cp app/build/outputs/apk/debug/app-debug.apk ../CallGuard.apk

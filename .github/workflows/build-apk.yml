@@ -1,0 +1,60 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main, jobradar]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.11.1"
+
+      - name: Build debug APK
+        run: |
+          set -o pipefail
+          if ! gradle assembleDebug --no-daemon 2>&1 | tee build.log; then
+            # Surface the real errors as annotations so they show up without opening logs
+            grep -E "^e: |error:|What went wrong|> " build.log | grep -v "^> Task" | head -40 > errs.txt || true
+            n=0
+            while IFS= read -r line; do
+              n=$((n+1)); [ $n -gt 9 ] && break
+              echo "::error::$line"
+            done < errs.txt
+            exit 1
+          fi
+
+      - name: Rename APK
+        run: cp app/build/outputs/apk/debug/app-debug.apk ../JobRadar.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: JobRadar-apk
+          path: JobRadar.apk
+
+      - name: Publish to Releases (download link for your phone)
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="jobradar-build-${{ github.run_number }}"
+          gh release create "$TAG" JobRadar.apk \
+            --title "JobRadar build ${{ github.run_number }}" \
+            --notes "Open this page on your phone, tap JobRadar.apk to download, then open it to install." \
+            --latest=false
